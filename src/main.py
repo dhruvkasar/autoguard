@@ -81,14 +81,24 @@ def process_stream(source: str, cfg):
     
     # Function to test if camera has actual video data
     def test_camera_has_video(cap_obj):
-        ret, frame = cap_obj.read()
-        if not ret or frame is None:
+        try:
+            ret, frame = cap_obj.read()
+            if not ret or frame is None:
+                return False, None
+            # Check if frame has actual video data (not all zeros/ones)
+            if frame.max() <= 1:  # Dummy camera with no real data
+                logger.warning(f"Camera has no real video data (max pixel value: {frame.max()})")
+                return False, None
+            # Explicitly delete frame to free memory immediately
+            frame_copy = frame.copy()
+            del frame
+            return True, frame_copy
+        except cv2.error as e:
+            logger.error(f"OpenCV error during camera test: {e}")
             return False, None
-        # Check if frame has actual video data (not all zeros/ones)
-        if frame.max() <= 1:  # Dummy camera with no real data
-            logger.warning(f"Camera has no real video data (max pixel value: {frame.max()})")
+        except Exception as e:
+            logger.error(f"Unexpected error during camera test: {e}")
             return False, None
-        return True, frame
     
     cap = cv2.VideoCapture(camera_index)
     working_camera = False
@@ -137,8 +147,11 @@ def process_stream(source: str, cfg):
     # Set camera properties
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, cfg["video"]["width"])
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, cfg["video"]["height"])
+    # Set buffer size to minimize memory usage
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
     
     logger.info(f"Camera initialized: {test_frame.shape[1]}x{test_frame.shape[0]}, pixel range: {test_frame.min()}-{test_frame.max()}")
+    del test_frame  # Free initialization frame
 
     display = bool(cfg["video"].get("display", True))
     dbg = cfg.get("debug", {})
@@ -177,21 +190,65 @@ def process_stream(source: str, cfg):
     detection_start = 0
     detection_latency = 0
     last_zone_state = {}  # Track zone changes for detection events
+    reconnect_attempts = 0
+    max_reconnect_attempts = 3
+    
     try:
         while True:
-            ok, frame = cap.read()
+            try:
+                ok, frame = cap.read()
+            except cv2.error as e:
+                logger.error(f"OpenCV error reading frame at frame {frame_count}: {e}")
+                ok, frame = False, None
+            except Exception as e:
+                logger.error(f"Unexpected error reading frame at frame {frame_count}: {e}")
+                ok, frame = False, None
+            
             if not ok or frame is None:
                 logger.error(f"Failed to read frame from source at frame {frame_count}.")
                 logger.info("Attempting to reconnect to camera...")
-                cap.release()
+                
+                # Properly release resources
+                try:
+                    cap.release()
+                except Exception as e:
+                    logger.warning(f"Error releasing camera: {e}")
+                
+                # Clear any OpenCV buffers
+                cv2.destroyAllWindows() if display else None
                 time.sleep(1)
-                cap = cv2.VideoCapture(camera_index)
-                if not cap.isOpened():
-                    logger.error("Could not reconnect to camera. Exiting.")
+                
+                reconnect_attempts += 1
+                if reconnect_attempts > max_reconnect_attempts:
+                    logger.error(f"Failed to reconnect after {max_reconnect_attempts} attempts. Exiting.")
                     break
-                continue
+                
+                try:
+                    cap = cv2.VideoCapture(camera_index)
+                    if not cap.isOpened():
+                        logger.error(f"Could not reconnect to camera (attempt {reconnect_attempts}/{max_reconnect_attempts}).")
+                        continue
+                    
+                    # Test if reconnected camera works
+                    has_video, test_frame = test_camera_has_video(cap)
+                    if not has_video:
+                        logger.error("Reconnected camera has no video data.")
+                        cap.release()
+                        continue
+                    
+                    # Reset camera properties
+                    cap.set(cv2.CAP_PROP_FRAME_WIDTH, cfg["video"]["width"])
+                    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, cfg["video"]["height"])
+                    
+                    logger.info(f"Successfully reconnected to camera {camera_index}")
+                    reconnect_attempts = 0  # Reset counter on successful reconnect
+                    continue
+                except Exception as e:
+                    logger.error(f"Error during camera reconnection: {e}")
+                    continue
             
             frame_count += 1
+            reconnect_attempts = 0  # Reset on successful frame read
 
             # Calculate FPS
             fps_frame_count += 1
@@ -200,6 +257,12 @@ def process_stream(source: str, cfg):
                 fps_frame_count = 0
                 fps_start_time = time.time()
 
+            # Validate frame before processing
+            if frame.size == 0 or frame.shape[0] == 0 or frame.shape[1] == 0:
+                logger.warning(f"Invalid frame dimensions at frame {frame_count}: {frame.shape}")
+                del frame  # Free invalid frame memory
+                continue
+            
             # Add status overlay to show camera is working
             if display:
                 # Draw camera status
@@ -211,8 +274,13 @@ def process_stream(source: str, cfg):
 
             # Detection with timing
             detection_start = time.time()
-            detections = det.detect(frame)
+            try:
+                detections = det.detect(frame)
+            except Exception as e:
+                logger.error(f"Detection error at frame {frame_count}: {e}")
+                detections = None
             detection_latency = (time.time() - detection_start) * 1000  # Convert to ms
+            
             if detections is None or len(detections) == 0:
                 # Update activity with zero counts
                 activity_tracker.update_activity(
@@ -233,6 +301,7 @@ def process_stream(source: str, cfg):
                     cv2.imshow("AutoGuard", frame)
                     if cv2.waitKey(1) & 0xFF == ord('q'):
                         break
+                del frame  # Free frame memory when no detections
                 continue
 
             # Tracking
