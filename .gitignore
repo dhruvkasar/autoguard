@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual Environment
+.venv/
+venv/
+ENV/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific
+logs/*.log
+evidence/*.jpg
+evidence/*.json
+evidence/thumbnails/
+stream_cache/
+*.pyc
+
+# Keep directory structure
+!logs/.gitkeep
+!evidence/.gitkeep
+
+# Environment variables (NEVER commit secrets)
+.env
+
+# Model weights (large file)
+*.pt
+*.onnx
+*.tflite
+
+# Temporary files
+*.tmp
+*.cache
+temp/

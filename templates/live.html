@@ -1,0 +1,379 @@
+{% extends "base.html" %}
+
+{% block title %}Live Feed - AutoGuard{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1 class="page-title">
+        <span class="live-dot me-2"></span>
+        Live Camera Feed
+    </h1>
+    <p class="page-subtitle">Real-time monitoring with AI detection overlays</p>
+</div>
+
+<div class="row">
+    <!-- Main Video Feed -->
+    <div class="col-lg-8 mb-4">
+        <div class="card">
+            <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
+                <div>
+                    <i class="bi bi-camera-video-fill me-2"></i>
+                    <strong>CAM01</strong> - Front Store
+                </div>
+                <div>
+                    <span class="badge bg-success">
+                        <i class="bi bi-circle-fill" style="font-size: 0.5rem;"></i> ONLINE
+                    </span>
+                    <span class="badge bg-secondary ms-2">
+                        <i class="bi bi-speedometer2"></i> 24 FPS
+                    </span>
+                </div>
+            </div>
+            <div class="card-body p-0 bg-dark">
+                <!-- Live video stream -->
+                <div style="position: relative; width: 100%; background: #000;">
+                    <img id="liveStream" 
+                         src="/video_feed?token={{ token }}" 
+                         style="width: 100%; height: auto; display: block;"
+                         alt="Live camera feed"
+                         onerror="handleStreamError()">
+                    
+                    <!-- Connection status overlay -->
+                    <div id="connectionStatus" style="position: absolute; top: 20px; left: 20px; background: rgba(0,188,212,0.9); color: white; padding: 8px 16px; border-radius: 4px; font-size: 0.9rem;">
+                        <i class="bi bi-circle-fill" style="font-size: 0.5rem;"></i> Connected
+                    </div>
+                </div>
+            </div>
+            <div class="card-footer d-flex justify-content-between">
+                <div>
+                    <button class="btn btn-sm btn-outline-primary" disabled>
+                        <i class="bi bi-play-fill"></i> Playing
+                    </button>
+                    <button class="btn btn-sm btn-outline-secondary ms-2" onclick="takeSnapshot()">
+                        <i class="bi bi-camera-fill"></i> Snapshot
+                    </button>
+                    <button class="btn btn-sm btn-outline-secondary ms-2" onclick="toggleFullscreen()">
+                        <i class="bi bi-arrows-fullscreen"></i> Fullscreen
+                    </button>
+                </div>
+                <div>
+                    <button class="btn btn-sm btn-outline-secondary" onclick="toggleOverlays()">
+                        <i class="bi bi-gear-fill"></i> Settings
+                    </button>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Detection Settings -->
+        <div class="card mt-4">
+            <div class="card-header">
+                <strong><i class="bi bi-sliders me-2"></i>Detection Overlays</strong>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-6 mb-3">
+                        <div class="form-check form-switch">
+                            <input class="form-check-input" type="checkbox" id="showBboxes" checked>
+                            <label class="form-check-label" for="showBboxes">
+                                Show Bounding Boxes
+                            </label>
+                        </div>
+                    </div>
+                    <div class="col-md-6 mb-3">
+                        <div class="form-check form-switch">
+                            <input class="form-check-input" type="checkbox" id="showZones" checked>
+                            <label class="form-check-label" for="showZones">
+                                Show Zone Boundaries
+                            </label>
+                        </div>
+                    </div>
+                    <div class="col-md-6 mb-3">
+                        <div class="form-check form-switch">
+                            <input class="form-check-input" type="checkbox" id="showTrackIds" checked>
+                            <label class="form-check-label" for="showTrackIds">
+                                Show Track IDs
+                            </label>
+                        </div>
+                    </div>
+                    <div class="col-md-6 mb-3">
+                        <div class="form-check form-switch">
+                            <input class="form-check-input" type="checkbox" id="showPoses">
+                            <label class="form-check-label" for="showPoses">
+                                Show Pose Skeletons
+                            </label>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Activity Sidebar -->
+    <div class="col-lg-4">
+        <!-- Current Activity -->
+        <div class="card mb-4">
+            <div class="card-header">
+                <strong><i class="bi bi-activity me-2"></i>Current Activity</strong>
+            </div>
+            <div class="card-body">
+                <div class="mb-3">
+                    <div class="d-flex justify-content-between mb-1">
+                        <small class="text-muted">Tracked Objects</small>
+                        <strong id="trackedCount">0</strong>
+                    </div>
+                    <div class="progress" style="height: 8px;">
+                        <div id="trackedProgress" class="progress-bar bg-info" style="width: 0%"></div>
+                    </div>
+                </div>
+                
+                <div class="mb-3">
+                    <div class="d-flex justify-content-between mb-1">
+                        <small class="text-muted">Shelf Zone</small>
+                        <strong><span id="shelfCount">0</span> persons</strong>
+                    </div>
+                    <div class="progress" style="height: 8px;">
+                        <div id="shelfProgress" class="progress-bar bg-warning" style="width: 0%"></div>
+                    </div>
+                </div>
+                
+                <div class="mb-3">
+                    <div class="d-flex justify-content-between mb-1">
+                        <small class="text-muted">Checkout Zone</small>
+                        <strong><span id="checkoutCount">0</span> persons</strong>
+                    </div>
+                    <div class="progress" style="height: 8px;">
+                        <div id="checkoutProgress" class="progress-bar bg-success" style="width: 0%"></div>
+                    </div>
+                </div>
+                
+                <div class="mb-0">
+                    <div class="d-flex justify-content-between mb-1">
+                        <small class="text-muted">Exit Zone</small>
+                        <strong><span id="exitCount">0</span> person</strong>
+                    </div>
+                    <div class="progress" style="height: 8px;">
+                        <div id="exitProgress" class="progress-bar bg-primary" style="width: 0%"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Recent Detections -->
+        <div class="card">
+            <div class="card-header">
+                <strong><i class="bi bi-bell-fill me-2"></i>Recent Detections</strong>
+            </div>
+            <div class="card-body p-0">
+                <div id="recentDetections" class="list-group list-group-flush">
+                    <div class="list-group-item text-center text-muted">
+                        <small>No recent activity</small>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- System Stats -->
+        <div class="card mt-4">
+            <div class="card-header">
+                <strong><i class="bi bi-cpu me-2"></i>System Performance</strong>
+            </div>
+            <div class="card-body">
+                <div class="mb-3">
+                    <div class="d-flex justify-content-between mb-1">
+                        <small>Frame Rate</small>
+                        <strong><span id="fpsValue">0</span> FPS</strong>
+                    </div>
+                </div>
+                <div class="mb-3">
+                    <div class="d-flex justify-content-between mb-1">
+                        <small>Detection Latency</small>
+                        <strong><span id="latencyValue">0</span>ms</strong>
+                    </div>
+                </div>
+                <div class="mb-3">
+                    <div class="d-flex justify-content-between mb-1">
+                        <small>CPU Usage</small>
+                        <strong><span id="cpuValue">0</span>%</strong>
+                    </div>
+                    <div class="progress" style="height: 6px;">
+                        <div id="cpuProgress" class="progress-bar bg-success" style="width: 0%"></div>
+                    </div>
+                </div>
+                <div class="mb-0">
+                    <div class="d-flex justify-content-between mb-1">
+                        <small>Memory</small>
+                        <strong><span id="memoryValue">0</span> GB</strong>
+                    </div>
+                    <div class="progress" style="height: 6px;">
+                        <div id="memoryProgress" class="progress-bar bg-info" style="width: 0%"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+let isConnected = true;
+let reconnectAttempts = 0;
+
+function handleStreamError() {
+    isConnected = false;
+    const status = document.getElementById('connectionStatus');
+    if (status) {
+        status.style.background = 'rgba(244,67,54,0.9)';
+        status.innerHTML = '<i class="bi bi-x-circle-fill"></i> Disconnected';
+    }
+    
+    // Try to reconnect
+    reconnectAttempts++;
+    if (reconnectAttempts < 5) {
+        setTimeout(() => {
+            const img = document.getElementById('liveStream');
+            if (img) {
+                img.src = '/video_feed?token={{ token }}&t=' + Date.now();
+            }
+        }, 2000);
+    }
+}
+
+// Take snapshot
+function takeSnapshot() {
+    window.open('/snapshot?token={{ token }}', '_blank');
+}
+
+// Toggle fullscreen
+function toggleFullscreen() {
+    const videoContainer = document.getElementById('liveStream').parentElement;
+    if (!document.fullscreenElement) {
+        videoContainer.requestFullscreen().catch(err => {
+            alert('Error attempting to enable fullscreen: ' + err.message);
+        });
+    } else {
+        document.exitFullscreen();
+    }
+}
+
+// Toggle overlay settings (placeholder)
+function toggleOverlays() {
+    alert('Overlay settings - Coming soon!\nCurrently shows: Zones, Track IDs, and Detection boxes');
+}
+
+// Update live activity stats
+function updateActivity() {
+    fetch('/live_activity?token={{ token }}')
+        .then(response => response.json())
+        .then(data => {
+            // Update tracked objects
+            const tracked = data.activity.tracked_objects || 0;
+            document.getElementById('trackedCount').textContent = tracked;
+            document.getElementById('trackedProgress').style.width = Math.min(tracked * 10, 100) + '%';
+            
+            // Update zone counts
+            const zones = data.activity.zone_counts || {};
+            const shelf = zones.shelf || 0;
+            const checkout = zones.checkout || 0;
+            const exit = zones.exit || 0;
+            
+            document.getElementById('shelfCount').textContent = shelf;
+            document.getElementById('checkoutCount').textContent = checkout;
+            document.getElementById('exitCount').textContent = exit;
+            
+            // Update progress bars (percentage of tracked objects in each zone)
+            if (tracked > 0) {
+                document.getElementById('shelfProgress').style.width = (shelf / tracked * 100) + '%';
+                document.getElementById('checkoutProgress').style.width = (checkout / tracked * 100) + '%';
+                document.getElementById('exitProgress').style.width = (exit / tracked * 100) + '%';
+            } else {
+                document.getElementById('shelfProgress').style.width = '0%';
+                document.getElementById('checkoutProgress').style.width = '0%';
+                document.getElementById('exitProgress').style.width = '0%';
+            }
+            
+            // Update recent detections
+            const detections = data.recent_detections || [];
+            const detectionsDiv = document.getElementById('recentDetections');
+            
+            if (detections.length === 0) {
+                detectionsDiv.innerHTML = '<div class="list-group-item text-center text-muted"><small>No recent activity</small></div>';
+            } else {
+                detectionsDiv.innerHTML = detections.map(det => {
+                    const badgeClass = det.zone === 'shelf' ? 'bg-warning' : 
+                                      det.zone === 'checkout' ? 'bg-success' : 'bg-primary';
+                    const eventText = det.event_type === 'zone_change' ? 
+                                     `Entered ${det.zone} zone` : det.event_type;
+                    
+                    return `
+                        <div class="list-group-item">
+                            <div class="d-flex w-100 justify-content-between">
+                                <h6 class="mb-1">Track ID ${det.track_id}</h6>
+                                <small class="text-muted">${det.time_ago}</small>
+                            </div>
+                            <p class="mb-1 small text-muted">${eventText}</p>
+                            <span class="badge ${badgeClass}">Monitoring</span>
+                        </div>
+                    `;
+                }).join('');
+            }
+            
+            // Update system performance
+            const fps = data.activity.fps || 0;
+            const latency = data.activity.detection_latency || 0;
+            const cpu = data.system.cpu_percent || 0;
+            const memory = data.system.memory_gb || 0;
+            const memoryPercent = data.system.memory_percent || 0;
+            
+            document.getElementById('fpsValue').textContent = Math.round(fps);
+            document.getElementById('latencyValue').textContent = Math.round(latency);
+            document.getElementById('cpuValue').textContent = Math.round(cpu);
+            document.getElementById('memoryValue').textContent = memory.toFixed(1);
+            
+            // Update progress bars
+            document.getElementById('cpuProgress').style.width = cpu + '%';
+            document.getElementById('memoryProgress').style.width = memoryPercent + '%';
+            
+            // Change CPU bar color based on usage
+            const cpuBar = document.getElementById('cpuProgress');
+            if (cpu > 80) {
+                cpuBar.className = 'progress-bar bg-danger';
+            } else if (cpu > 50) {
+                cpuBar.className = 'progress-bar bg-warning';
+            } else {
+                cpuBar.className = 'progress-bar bg-success';
+            }
+        })
+        .catch(err => {
+            console.error('Failed to update activity:', err);
+        });
+}
+
+// Check stream status periodically
+setInterval(() => {
+    fetch('/stream_stats?token={{ token }}')
+        .then(response => response.json())
+        .then(data => {
+            const status = document.getElementById('connectionStatus');
+            if (data.active && status) {
+                status.style.background = 'rgba(0,188,212,0.9)';
+                status.innerHTML = '<i class="bi bi-circle-fill" style="font-size: 0.5rem;"></i> Connected';
+                isConnected = true;
+                reconnectAttempts = 0;
+            } else if (status) {
+                status.style.background = 'rgba(255,152,0,0.9)';
+                status.innerHTML = '<i class="bi bi-exclamation-triangle-fill"></i> No Feed';
+            }
+        })
+        .catch(err => {
+            console.error('Failed to check stream status:', err);
+        });
+    
+    // Update activity data
+    updateActivity();
+}, 2000);
+
+// Initial update
+updateActivity();
+</script>
+{% endblock %}

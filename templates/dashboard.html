@@ -1,0 +1,259 @@
+{% extends "base.html" %}
+
+{% block title %}Evidence Dashboard - AutoGuard{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1 class="page-title">Evidence Dashboard</h1>
+    <p class="page-subtitle">Real-time monitoring and incident review</p>
+</div>
+
+<!-- Statistics Cards -->
+<div class="row mb-4">
+    <div class="col-md-3 mb-3">
+        <div class="stat-card">
+            <div class="stat-icon primary">
+                <i class="bi bi-exclamation-triangle-fill"></i>
+            </div>
+            <h3 class="mb-1">{{ total_incidents }}</h3>
+            <p class="text-muted mb-0">Total Incidents</p>
+        </div>
+    </div>
+    
+    <div class="col-md-3 mb-3">
+        <div class="stat-card">
+            <div class="stat-icon danger">
+                <i class="bi bi-shield-exclamation"></i>
+            </div>
+            <h3 class="mb-1">{{ high_priority }}</h3>
+            <p class="text-muted mb-0">High Priority</p>
+        </div>
+    </div>
+    
+    <div class="col-md-3 mb-3">
+        <div class="stat-card">
+            <div class="stat-icon warning">
+                <i class="bi bi-bag-dash"></i>
+            </div>
+            <h3 class="mb-1">{{ theft_alerts }}</h3>
+            <p class="text-muted mb-0">Theft Alerts</p>
+        </div>
+    </div>
+    
+    <div class="col-md-3 mb-3">
+        <div class="stat-card">
+            <div class="stat-icon success">
+                <i class="bi bi-check-circle-fill"></i>
+            </div>
+            <h3 class="mb-1">{{ resolved }}</h3>
+            <p class="text-muted mb-0">Resolved</p>
+        </div>
+    </div>
+</div>
+
+<!-- Filters -->
+<div class="card mb-4">
+    <div class="card-body">
+        <form method="get" action="/dashboard" class="row g-3">
+            <div class="col-md-3">
+                <label class="form-label">Date Range</label>
+                <select class="form-select" name="date_range">
+                    <option value="today" {% if date_range == 'today' %}selected{% endif %}>Today</option>
+                    <option value="week" {% if date_range == 'week' %}selected{% endif %}>Last 7 Days</option>
+                    <option value="month" {% if date_range == 'month' %}selected{% endif %}>Last 30 Days</option>
+                    <option value="all" {% if date_range == 'all' %}selected{% endif %}>All Time</option>
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label">Rule Type</label>
+                <select class="form-select" name="rule_type">
+                    <option value="all" {% if rule_type == 'all' %}selected{% endif %}>All Rules</option>
+                    <option value="loitering" {% if rule_type == 'loitering' %}selected{% endif %}>Loitering</option>
+                    <option value="exit_checkout" {% if rule_type == 'exit_checkout' %}selected{% endif %}>Exit Without Checkout</option>
+                    <option value="shelf_exit" {% if rule_type == 'shelf_exit' %}selected{% endif %}>Repeated Shelf-Exit</option>
+                    <option value="violence" {% if rule_type == 'violence' %}selected{% endif %}>Violence/Threat</option>
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label">Camera</label>
+                <select class="form-select" name="camera">
+                    <option value="all" {% if camera_filter == 'all' %}selected{% endif %}>All Cameras</option>
+                    <option value="CAM01" {% if camera_filter == 'CAM01' %}selected{% endif %}>CAM01</option>
+                </select>
+            </div>
+            <div class="col-md-3 d-flex align-items-end">
+                <button type="submit" class="btn btn-primary me-2">
+                    <i class="bi bi-funnel"></i> Apply Filters
+                </button>
+                <a href="/dashboard" class="btn btn-outline-secondary">
+                    <i class="bi bi-arrow-clockwise"></i> Reset
+                </a>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Evidence Grid -->
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h4>Recent Incidents ({{ evidence|length }})</h4>
+    <div>
+        <button class="btn btn-outline-primary btn-sm" onclick="refreshEvidence()">
+            <i class="bi bi-arrow-clockwise"></i> Refresh
+        </button>
+    </div>
+</div>
+
+{% if evidence %}
+<div class="row row-cols-1 row-cols-md-3 g-4">
+    {% for item in evidence %}
+    <div class="col">
+        <div class="evidence-card">
+            <!-- Evidence Image -->
+            <a href="/evidence/image?name={{ item.image_name }}{% if token %}&token={{ token }}{% endif %}" target="_blank">
+                <img src="/evidence/thumb?name={{ item.image_name }}{% if token %}&token={{ token }}{% endif %}" 
+                     alt="Evidence snapshot"
+                     loading="lazy"
+                     onerror="this.onerror=null; this.src='/evidence/image?name={{ item.image_name }}{% if token %}&token={{ token }}{% endif %}'; this.style.opacity='0.8';"
+                     style="background: #f0f0f0;">
+            </a>
+            
+            <!-- Card Body -->
+            <div class="evidence-card-body">
+                <!-- Priority Badge -->
+                <div class="d-flex justify-content-between align-items-start mb-2">
+                    <div>
+                        {% if item.priority == 'high' %}
+                        <span class="badge-priority-high">
+                            <i class="bi bi-exclamation-triangle-fill"></i> HIGH PRIORITY
+                        </span>
+                        {% else %}
+                        <span class="badge-priority-standard">
+                            <i class="bi bi-info-circle-fill"></i> STANDARD
+                        </span>
+                        {% endif %}
+                        
+                        {% if item.resolved %}
+                        <span class="badge bg-success ms-1">
+                            <i class="bi bi-check-circle-fill"></i> Resolved
+                        </span>
+                        {% endif %}
+                    </div>
+                    
+                    <small class="text-muted">
+                        <i class="bi bi-camera-fill"></i> {{ item.camera_id }}
+                    </small>
+                </div>
+                
+                <!-- Rule Name -->
+                <h6 class="fw-bold mb-2">{{ item.rule }}</h6>
+                
+                <!-- AI Description -->
+                {% if item.description %}
+                <p class="text-muted small mb-2">{{ item.description }}</p>
+                {% endif %}
+                
+                <!-- Metadata -->
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <small class="text-muted">
+                        <i class="bi bi-person-badge"></i> Track ID: {{ item.person_id }}
+                    </small>
+                    <small class="text-muted">
+                        <i class="bi bi-clock"></i> {{ item.timestamp_short }}
+                    </small>
+                </div>
+                
+                <!-- Action Buttons -->
+                <div class="d-flex gap-2">
+                    {% if role in ['admin', 'security'] %}
+                        {% if item.resolved %}
+                        <button onclick="toggleResolve('{{ item.id }}', false)" class="btn btn-sm btn-outline-warning flex-grow-1">
+                            <i class="bi bi-arrow-counterclockwise"></i> Unresolve
+                        </button>
+                        {% else %}
+                        <button onclick="toggleResolve('{{ item.id }}', true)" class="btn btn-sm btn-outline-success flex-grow-1">
+                            <i class="bi bi-check-circle"></i> Mark Resolved
+                        </button>
+                        {% endif %}
+                    {% endif %}
+                    <a href="/evidence/image?name={{ item.image_name }}{% if token %}&token={{ token }}{% endif %}" 
+                       download 
+                       class="btn btn-sm btn-outline-secondary">
+                        <i class="bi bi-download"></i>
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+<!-- Pagination -->
+{% if total_pages > 1 %}
+<nav aria-label="Evidence pagination" class="mt-4">
+    <ul class="pagination justify-content-center">
+        <li class="page-item {% if current_page == 1 %}disabled{% endif %}">
+            <a class="page-link" href="?page={{ current_page - 1 }}&date_range={{ date_range }}&rule_type={{ rule_type }}&camera={{ camera_filter }}" tabindex="-1">Previous</a>
+        </li>
+        
+        {% for page_num in range(1, total_pages + 1) %}
+            {% if page_num == 1 or page_num == total_pages or (page_num >= current_page - 2 and page_num <= current_page + 2) %}
+                <li class="page-item {% if page_num == current_page %}active{% endif %}">
+                    <a class="page-link" href="?page={{ page_num }}&date_range={{ date_range }}&rule_type={{ rule_type }}&camera={{ camera_filter }}">{{ page_num }}</a>
+                </li>
+            {% elif page_num == current_page - 3 or page_num == current_page + 3 %}
+                <li class="page-item disabled"><span class="page-link">...</span></li>
+            {% endif %}
+        {% endfor %}
+        
+        <li class="page-item {% if current_page == total_pages %}disabled{% endif %}">
+            <a class="page-link" href="?page={{ current_page + 1 }}&date_range={{ date_range }}&rule_type={{ rule_type }}&camera={{ camera_filter }}">Next</a>
+        </li>
+    </ul>
+</nav>
+{% endif %}
+
+{% else %}
+<div class="alert alert-info text-center" role="alert">
+    <i class="bi bi-info-circle fs-1 d-block mb-3"></i>
+    <h5>No incidents recorded yet</h5>
+    <p class="mb-0">Evidence will appear here when detection rules are triggered.</p>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function refreshEvidence() {
+    window.location.reload();
+}
+
+function toggleResolve(evidenceId, resolve) {
+    const endpoint = resolve ? 'resolve' : 'unresolve';
+    const token = '{{ token }}';
+    
+    fetch(`/evidence/${evidenceId}/${endpoint}`, {
+        method: 'POST',
+        headers: {
+            'X-Auth-Token': token,
+            'Content-Type': 'application/json'
+        }
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            // Reload the page to show updated status
+            window.location.reload();
+        } else {
+            alert('Error: ' + (data.error || 'Unknown error'));
+        }
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        alert('Failed to update incident status');
+    });
+}
+
+// Auto-refresh every 30 seconds
+setInterval(refreshEvidence, 30000);
+</script>
+{% endblock %}

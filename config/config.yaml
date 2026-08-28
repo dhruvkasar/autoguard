@@ -1,0 +1,52 @@
+alerts:
+  cooldown_seconds: 15
+  daily_cap: 50
+  enabled: true
+audio:
+  beep_cooldown_seconds: 5
+  beep_duration_ms: 300
+  beep_enabled: true
+  beep_frequency: 1000
+  exit_beep: true
+  loiter_beep: true
+debug:
+  overlay: true
+  verbose: true
+lines: {}
+model:
+  confidence_threshold: 0.35
+  device: auto
+  weights: yolov8n.pt
+rules:
+  loitering_seconds: 5
+  shelf_exit_repeat_count: 2
+  shelf_exit_time_window_seconds: 60
+  use_checkout_line: false
+storage:
+  evidence_dir: evidence
+  logs_dir: logs
+  retention_days: 7
+tracking:
+  match_threshold: 0.8
+  track_threshold: 0.3
+video:
+  display: true
+  height: 480
+  source: 1
+  width: 640
+zones:
+  checkout:
+  - 280
+  - 51
+  - 393
+  - 446
+  exit:
+  - 544
+  - 54
+  - 611
+  - 473
+  shelf:
+  - 22
+  - 28
+  - 199
+  - 454

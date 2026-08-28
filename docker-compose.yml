@@ -1,0 +1,59 @@
+version: '3.8'
+
+services:
+  # AutoGuard Backend API & Dashboard
+  backend:
+    build: .
+    container_name: autoguard-backend
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./evidence:/app/evidence
+      - ./logs:/app/logs
+      - ./config:/app/config
+      - ./.env:/app/.env
+    environment:
+      - FLASK_ENV=development
+      - FLASK_APP=src.server
+    env_file:
+      - .env
+    restart: unless-stopped
+    networks:
+      - autoguard-net
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:5000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # AutoGuard Edge Detection Service (optional - for headless operation)
+  # Uncomment to run detection in container (requires camera access)
+  # detection:
+  #   build: .
+  #   container_name: autoguard-detection
+  #   volumes:
+  #     - ./evidence:/app/evidence
+  #     - ./logs:/app/logs
+  #     - ./config:/app/config
+  #     - ./.env:/app/.env
+  #   environment:
+  #     - DISPLAY=${DISPLAY}
+  #   env_file:
+  #     - .env
+  #   devices:
+  #     - /dev/video0:/dev/video0  # Webcam access (Linux)
+  #   command: python src/main.py --source 0
+  #   restart: unless-stopped
+  #   networks:
+  #     - autoguard-net
+  #   depends_on:
+  #     - backend
+
+networks:
+  autoguard-net:
+    driver: bridge
+
+volumes:
+  evidence-data:
+  logs-data:
