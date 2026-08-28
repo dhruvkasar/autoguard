@@ -467,5 +467,6 @@ For issues, questions, or feature requests:
 
 ## Contributors
 - Dhruv Kasar
+- Aditya Salave
 
 **Made with ❤️ for a safer retail environment**
