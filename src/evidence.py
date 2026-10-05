@@ -6,6 +6,21 @@ import cv2
 from .utils import sha256_file
 import tempfile
 import zipfile
+import logging
+
+# Check if database should be used
+USE_DATABASE = os.getenv('USE_DATABASE', 'false').lower() == 'true'
+
+if USE_DATABASE:
+    try:
+        from .database import insert_evidence as db_insert_evidence
+        from .database import init_database
+        logger = logging.getLogger(__name__)
+        logger.info("Database mode enabled for evidence storage")
+    except ImportError:
+        logger = logging.getLogger(__name__)
+        logger.warning("Database module not available, falling back to JSON storage")
+        USE_DATABASE = False
 
 
 def save_evidence(frame, xyxy: Tuple[int, int, int, int], person_id: int, rule_name: str, 
@@ -32,6 +47,7 @@ def save_evidence(frame, xyxy: Tuple[int, int, int, int], person_id: int, rule_n
     base = f"evidence_{camera_id}_id{person_id}_{rule_name.replace(' ', '_')}_{ts}"
     image_path = os.path.join(evidence_dir, base + ".jpg")
     meta_path = os.path.join(evidence_dir, base + ".json")
+    evidence_id = base
 
     x1, y1, x2, y2 = map(int, xyxy)
     cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 2)
@@ -42,18 +58,42 @@ def save_evidence(frame, xyxy: Tuple[int, int, int, int], person_id: int, rule_n
     cv2.imwrite(image_path, frame)
     digest = sha256_file(image_path)
 
+    timestamp_str = time.strftime("%Y-%m-%d %H:%M:%S")
+    
     metadata = {
-        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "timestamp": timestamp_str,
         "person_id": person_id,
         "rule": rule_name,
         "camera_id": camera_id,
         "image_path": image_path,
         "sha256": digest,
-        "description": description,  # AI-generated description
-        "priority": priority,  # 'high' or 'standard'
+        "description": description,
+        "priority": priority,
+        "bbox": [x1, y1, x2, y2]
     }
+    
+    # Always save JSON for backward compatibility
     with open(meta_path, "w", encoding="utf-8") as f:
         json.dump(metadata, f, indent=2)
+    
+    # Also save to database if enabled
+    if USE_DATABASE:
+        try:
+            db_insert_evidence(
+                evidence_id=evidence_id,
+                camera_id=camera_id,
+                timestamp=timestamp_str,
+                person_id=person_id,
+                rule=rule_name,
+                image_path=image_path,
+                image_hash=digest,
+                description=description,
+                priority=priority,
+                metadata={"bbox": [x1, y1, x2, y2]}
+            )
+            logger.info(f"Evidence saved to database: {evidence_id}")
+        except Exception as e:
+            logger.error(f"Failed to save evidence to database: {e}")
 
     logger.info(f"Evidence captured: {image_path} | Priority: {priority} | SHA256={digest}")
     return image_path

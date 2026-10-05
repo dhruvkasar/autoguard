@@ -1,12 +1,15 @@
 # AutoGuard - AI-Powered Retail Security System
 
-**Version:** 1.0.0 (MVP)  
-**Status:** Production Ready  
+**Version:** 1.1.0  
+**Status:** Production Ready ✅  
 **License:** MIT  
+**Last Updated:** October 5, 2026
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![Security: Yes](https://img.shields.io/badge/security-audited-green.svg)](./docs/SECURITY.md)
 [![Tests: Passing](https://img.shields.io/badge/tests-passing-brightgreen.svg)](./tests/)
+[![CSRF: Protected](https://img.shields.io/badge/CSRF-protected-green.svg)](./docs/SECURITY.md)
+[![Database: SQLite](https://img.shields.io/badge/database-SQLite-blue.svg)](./docs/guides/QUICKSTART_v1.1.md)
 
 ---
 
@@ -21,11 +24,32 @@ Developed by cybersecurity students with a focus on secure-by-design principles.
 ✅ **Real-time Person Detection & Tracking** - YOLOv8 + ByteTrack  
 ✅ **Behavioral Analysis** - Loitering, repeated movements, exit without checkout  
 ✅ **Evidence Capture** - Automatic snapshots with SHA-256 integrity verification  
+✅ **CSRF Protection** - Secure web forms with Flask-WTF (v1.1.0) ⭐  
+✅ **Database Storage** - SQLite with migration tools (v1.1.0) ⭐  
+✅ **RTSP Support** - IP cameras, USB, video files (v1.1.0) ⭐  
 ✅ **Secure Web Dashboard** - Role-based access control (Admin, Security, Viewer)  
-✅ **Mobile Alerts** - Telegram integration with secure token authentication  
+✅ **Mobile Alerts** - Telegram integration with instant notifications  
 ✅ **Live Video Streaming** - Real-time feed with activity statistics  
 ✅ **AI-Generated Descriptions** - Natural language incident reports  
 ✅ **Audit Logging** - Complete audit trail of all detections and actions  
+
+---
+
+## 📚 Documentation
+
+**New to AutoGuard?** Start here:
+- 📖 **[Quick Start Guide](docs/guides/QUICKSTART_v1.1.md)** - Get running in 10 minutes
+- 📱 **[Telegram Setup](docs/guides/TELEGRAM_QUICKSTART.md)** - Enable mobile alerts (10 min)
+- 📹 **[RTSP Guide](docs/guides/RTSP_GUIDE.md)** - Use IP cameras
+- 🗂️ **[Project Structure](PROJECT_STRUCTURE.md)** - Complete file organization
+- 📋 **[Table of Contents](TABLE_OF_CONTENTS.md)** - All documentation indexed
+- ⚡ **[Quick Reference](QUICK_REFERENCE.md)** - Common commands
+
+**Complete Documentation:**
+- [API Reference](docs/API.md)
+- [Security Guide](docs/SECURITY.md)
+- [Deployment Guide](docs/guides/DEPLOYMENT_GUIDE.md)
+- [Project Roadmap](PROJECT_PROGRESS.md)  
 
 ---
 
@@ -42,9 +66,7 @@ Developed by cybersecurity students with a focus on secure-by-design principles.
 
 **1. Clone or Extract Project**
 ```powershell
-cd D:\
-# Extract AutoGuard_Transfer.zip here
-cd AutoGuard
+cd "D:\Major Project"
 ```
 
 **2. Create Virtual Environment**
@@ -61,43 +83,42 @@ pip install -r requirements.txt
 
 **4. Configure Environment**
 ```powershell
-# Copy example env file
-Copy-Item .env.example .env
-
-# Edit .env and set your tokens
+# Edit .env file with your settings
 notepad .env
 ```
 
-**Generate secure tokens:**
-```powershell
-python -c "import secrets; print(secrets.token_urlsafe(32))"
+**Required settings:**
+```bash
+FLASK_SECRET_KEY=your_secret_key_here
+TELEGRAM_BOT_TOKEN=your_bot_token
+TELEGRAM_CHAT_IDS=your_chat_id
+ADMIN_TOKEN=your_admin_token
 ```
 
-**5. Test Camera**
+**5. Find Your Camera**
 ```powershell
-python test_camera.py
+python tools/discover_cameras.py
 ```
 
-**6. Calibrate Zones (First Time)**
+**6. Test Telegram (Optional)**
 ```powershell
-python -m src.zone_calibrator
-# Draw shelf, checkout, and exit zones
-# Press 's' to save, 'q' to quit
+python tools/check_telegram.py
 ```
 
-**7. Run Detection**
+**7. Start AutoGuard**
 ```powershell
-python src/main.py --source 0
+# Terminal 1: Detection Engine
+python -m src.main
+
+# Terminal 2: Web Dashboard (optional)
+python -m src.server
 ```
 
-**8. Start Web Dashboard**
-```powershell
-# In a new terminal
-.\.venv\Scripts\Activate.ps1
-python -m flask --app src.server run --host 127.0.0.1 --port 5000
-```
+**8. Access Dashboard**
+- Open browser: **http://localhost:5000**
+- Login with your token from `.env`
 
-Open browser: **http://localhost:5000**
+📖 **Detailed Setup:** See [docs/guides/QUICKSTART_v1.1.md](docs/guides/QUICKSTART_v1.1.md)
 
 ---
 

@@ -23,6 +23,7 @@ from .alerts import TelegramAlerter
 from .description_generator import get_generator
 from .stream_manager import get_stream_manager
 from .activity_tracker import get_activity_tracker
+from .video_source import VideoSource, parse_video_source
 
 
 def build_zones(cfg) -> ZoneManager:
@@ -75,83 +76,52 @@ def process_stream(source: str, cfg):
         cx1, cy1, cx2, cy2 = cfg["lines"]["checkout"]
         checkout_line = Line((int(cx1), int(cy1)), (int(cx2), int(cy2)))
 
-    # Video capture with detailed diagnostics
-    camera_index = int(source) if str(source).isdigit() else source
-    logger.info(f"Attempting to open camera source: {camera_index}")
+    # Initialize video source (USB camera, RTSP stream, or video file)
+    parsed_source = parse_video_source(source)
+    logger.info(f"Initializing video source: {parsed_source}")
     
-    # Function to test if camera has actual video data
-    def test_camera_has_video(cap_obj):
-        try:
-            ret, frame = cap_obj.read()
-            if not ret or frame is None:
-                return False, None
-            # Check if frame has actual video data (not all zeros/ones)
-            if frame.max() <= 1:  # Dummy camera with no real data
-                logger.warning(f"Camera has no real video data (max pixel value: {frame.max()})")
-                return False, None
-            # Explicitly delete frame to free memory immediately
-            frame_copy = frame.copy()
-            del frame
-            return True, frame_copy
-        except cv2.error as e:
-            logger.error(f"OpenCV error during camera test: {e}")
-            return False, None
-        except Exception as e:
-            logger.error(f"Unexpected error during camera test: {e}")
-            return False, None
+    video_source = VideoSource(
+        source=parsed_source,
+        reconnect_delay=cfg.get("video", {}).get("reconnect_delay", 5),
+        max_reconnect_attempts=cfg.get("video", {}).get("max_reconnect_attempts", 10)
+    )
     
-    cap = cv2.VideoCapture(camera_index)
-    working_camera = False
-    test_frame = None
-    
-    if cap.isOpened():
-        has_video, test_frame = test_camera_has_video(cap)
-        if has_video:
-            working_camera = True
-            logger.info(f"Camera {camera_index} opened successfully with real video data")
-        else:
-            logger.warning(f"Camera {camera_index} opened but has no real video data")
-            cap.release()
-    else:
-        logger.error(f"Failed to open camera source: {camera_index}")
-    
-    # If initial camera doesn't work, try alternatives
-    if not working_camera:
-        logger.info("Trying alternative camera indices...")
+    # Connect to video source
+    if not video_source.connect(
+        width=cfg["video"]["width"],
+        height=cfg["video"]["height"],
+        buffer_size=1
+    ):
+        # If RTSP/network source fails, don't try USB alternatives
+        if video_source.source_type != "USB":
+            logger.error(f"Failed to connect to {video_source.source_type} source: {parsed_source}")
+            raise RuntimeError(f"Failed to initialize {video_source.source_type} video source")
+        
+        # For USB cameras, try alternatives
+        logger.info("Trying alternative USB camera indices...")
+        working_camera = False
         for alt_index in [1, 0, 2]:
-            if alt_index == camera_index:
+            if alt_index == parsed_source:
                 continue
-            logger.info(f"Trying camera index {alt_index}...")
-            cap = cv2.VideoCapture(alt_index)
-            if cap.isOpened():
-                has_video, test_frame = test_camera_has_video(cap)
-                if has_video:
-                    logger.info(f"Successfully opened camera at index {alt_index} with real video")
-                    camera_index = alt_index
-                    working_camera = True
-                    break
-                else:
-                    logger.warning(f"Camera {alt_index} has no real video data, skipping")
-                    cap.release()
+            logger.info(f"Trying USB camera index {alt_index}...")
+            video_source = VideoSource(alt_index)
+            if video_source.connect(width=cfg["video"]["width"], height=cfg["video"]["height"]):
+                logger.info(f"Successfully connected to USB camera at index {alt_index}")
+                working_camera = True
+                break
         
         if not working_camera:
-            logger.error("Could not find any working camera with real video. Please check:")
+            logger.error("Could not find any working USB camera with real video. Please check:")
             logger.error("1. Camera is connected and not in use by another application")
             logger.error("2. Camera permissions are granted")
             logger.error("3. Camera drivers are installed")
             logger.error("4. Close any other apps using the camera (Zoom, Teams, etc.)")
-            raise RuntimeError("Failed to initialize camera with real video")
+            raise RuntimeError("Failed to initialize USB camera with real video")
     
-    logger.info(f"Camera opened successfully: {camera_index}")
-    
-    # Set camera properties
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, cfg["video"]["width"])
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, cfg["video"]["height"])
-    # Set buffer size to minimize memory usage
-    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-    
-    logger.info(f"Camera initialized: {test_frame.shape[1]}x{test_frame.shape[0]}, pixel range: {test_frame.min()}-{test_frame.max()}")
-    del test_frame  # Free initialization frame
+    # Log video source information
+    source_info = video_source.get_info()
+    logger.info(f"Video source connected: {source_info['type']}")
+    logger.info(f"Resolution: {source_info['width']}x{source_info['height']} @ {source_info['fps']:.1f}fps")
 
     display = bool(cfg["video"].get("display", True))
     dbg = cfg.get("debug", {})
@@ -190,65 +160,18 @@ def process_stream(source: str, cfg):
     detection_start = 0
     detection_latency = 0
     last_zone_state = {}  # Track zone changes for detection events
-    reconnect_attempts = 0
-    max_reconnect_attempts = 3
     
     try:
         while True:
-            try:
-                ok, frame = cap.read()
-            except cv2.error as e:
-                logger.error(f"OpenCV error reading frame at frame {frame_count}: {e}")
-                ok, frame = False, None
-            except Exception as e:
-                logger.error(f"Unexpected error reading frame at frame {frame_count}: {e}")
-                ok, frame = False, None
+            # Read frame from video source (handles reconnection automatically)
+            ok, frame = video_source.read()
             
             if not ok or frame is None:
-                logger.error(f"Failed to read frame from source at frame {frame_count}.")
-                logger.info("Attempting to reconnect to camera...")
-                
-                # Properly release resources
-                try:
-                    cap.release()
-                except Exception as e:
-                    logger.warning(f"Error releasing camera: {e}")
-                
-                # Clear any OpenCV buffers
-                cv2.destroyAllWindows() if display else None
-                time.sleep(1)
-                
-                reconnect_attempts += 1
-                if reconnect_attempts > max_reconnect_attempts:
-                    logger.error(f"Failed to reconnect after {max_reconnect_attempts} attempts. Exiting.")
-                    break
-                
-                try:
-                    cap = cv2.VideoCapture(camera_index)
-                    if not cap.isOpened():
-                        logger.error(f"Could not reconnect to camera (attempt {reconnect_attempts}/{max_reconnect_attempts}).")
-                        continue
-                    
-                    # Test if reconnected camera works
-                    has_video, test_frame = test_camera_has_video(cap)
-                    if not has_video:
-                        logger.error("Reconnected camera has no video data.")
-                        cap.release()
-                        continue
-                    
-                    # Reset camera properties
-                    cap.set(cv2.CAP_PROP_FRAME_WIDTH, cfg["video"]["width"])
-                    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, cfg["video"]["height"])
-                    
-                    logger.info(f"Successfully reconnected to camera {camera_index}")
-                    reconnect_attempts = 0  # Reset counter on successful reconnect
-                    continue
-                except Exception as e:
-                    logger.error(f"Error during camera reconnection: {e}")
-                    continue
+                logger.warning(f"Failed to read frame from source at frame {frame_count}. VideoSource will handle reconnection.")
+                time.sleep(0.1)  # Brief pause before retry
+                continue
             
             frame_count += 1
-            reconnect_attempts = 0  # Reset on successful frame read
 
             # Calculate FPS
             fps_frame_count += 1
@@ -450,7 +373,7 @@ def process_stream(source: str, cfg):
                 if cv2.waitKey(1) & 0xFF == ord('q'):
                     break
     finally:
-        cap.release()
+        video_source.release()
         if display:
             cv2.destroyAllWindows()
         logger.info("System stop")

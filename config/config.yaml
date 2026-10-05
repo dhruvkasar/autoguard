@@ -32,8 +32,15 @@ tracking:
 video:
   display: true
   height: 480
+  # Video source can be:
+  #   - USB camera index (e.g., 0, 1, 2)
+  #   - RTSP stream URL (e.g., rtsp://admin:password@192.168.1.100:554/stream)
+  #   - Video file path (e.g., test_video.mp4)
   source: 1
   width: 640
+  # Reconnection settings for network streams
+  reconnect_delay: 5
+  max_reconnect_attempts: 10
 zones:
   checkout:
   - 280

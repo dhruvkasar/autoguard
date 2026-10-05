@@ -1,5 +1,6 @@
 import os
 import json
+import logging
 from flask import Flask, request, send_file, abort, jsonify, redirect, make_response, render_template, Response
 import tempfile
 import zipfile
@@ -13,6 +14,32 @@ import psutil
 import cv2
 import secrets
 import hmac
+from flask_wtf.csrf import CSRFProtect, generate_csrf
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
+# Initialize logger
+logger = logging.getLogger(__name__)
+
+# Check if database mode is enabled
+USE_DATABASE = os.getenv('USE_DATABASE', 'false').lower() == 'true'
+
+if USE_DATABASE:
+    from .database import (
+        init_database, get_all_evidence, get_evidence_by_id,
+        update_evidence_resolution, get_evidence_stats, count_evidence,
+        generate_pairing_code, verify_pairing_code, register_device,
+        get_all_devices, get_device_by_id, get_device_by_token,
+        update_device_last_seen, revoke_device, log_device_activity,
+        get_device_stats, cleanup_expired_pairing_codes
+    )
+    logger.info("Server running in DATABASE mode")
+    # Initialize database on startup
+    init_database()
+else:
+    logger.info("Server running in JSON mode")
 
 EVIDENCE_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'evidence')
 
@@ -31,6 +58,15 @@ ROLE_MAP = {
 template_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'templates')
 static_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'static')
 app = Flask(__name__, template_folder=template_dir, static_folder=static_dir)
+
+# Configure Flask secret key for CSRF protection
+app.config['SECRET_KEY'] = os.getenv('FLASK_SECRET_KEY', secrets.token_hex(32))
+app.config['WTF_CSRF_TIME_LIMIT'] = None  # No expiration for CSRF tokens
+app.config['WTF_CSRF_SSL_STRICT'] = False  # Allow development without HTTPS
+app.config['WTF_CSRF_HEADERS'] = ['X-CSRFToken', 'X-CSRF-Token']  # Accept CSRF from headers
+
+# Initialize CSRF protection
+csrf = CSRFProtect(app)
 
 # Add security headers
 @app.after_request
@@ -120,19 +156,23 @@ def index():
 
 @app.get('/login')
 def login_get():
-    return (
-        "<h2>Login</h2>"
-        "<form method='post'>"
-        "Token: <input name='token' type='password' style='width:320px' autocomplete='off'/>"
-        "<button type='submit'>Set Token</button>"
-        "</form>"
-    )
+    # If already authenticated, redirect to dashboard
+    token = get_token()
+    if token and get_role_from_token(token):
+        return redirect('/dashboard')
+    return render_template('login.html')
 
 @app.post('/login')
 def login_post():
     token = request.form.get('token', '')
     if not token:
-        return abort(400)
+        return render_template('login.html', error='Token is required'), 400
+    
+    # Validate token against known roles
+    role = get_role_from_token(token)
+    if not role:
+        return render_template('login.html', error='Invalid access token'), 403
+    
     resp = make_response(redirect('/dashboard'))
     # Secure cookie with HTTPOnly, Secure (for HTTPS), and SameSite protection
     resp.set_cookie('auth_token', token, httponly=True, secure=True, samesite='Strict', max_age=43200)  # 12 hours
@@ -144,16 +184,32 @@ def logout():
     resp.delete_cookie('auth_token')
     return resp
 
+def get_evidence_list(date_range='all', rule_type='all', camera_filter='all', limit=1000, offset=0):
+    """Get evidence list from database or JSON files"""
+    if USE_DATABASE:
+        return get_all_evidence(
+            date_range=date_range,
+            rule_type=rule_type,
+            camera_filter=camera_filter,
+            limit=limit,
+            offset=offset
+        )
+    else:
+        # Legacy JSON mode
+        items = []
+        for fname in os.listdir(EVIDENCE_DIR):
+            if fname.endswith('.json'):
+                with open(os.path.join(EVIDENCE_DIR, fname), 'r', encoding='utf-8') as f:
+                    meta = json.load(f)
+                items.append(meta)
+        return items
+
+
 @app.get('/evidence')
 @require_role(['admin', 'security', 'viewer'])
 @rate_limit(120)
 def list_evidence():
-    items = []
-    for fname in os.listdir(EVIDENCE_DIR):
-        if fname.endswith('.json'):
-            with open(os.path.join(EVIDENCE_DIR, fname), 'r', encoding='utf-8') as f:
-                meta = json.load(f)
-            items.append(meta)
+    items = get_evidence_list()
     return jsonify(items)
 
 @app.get('/evidence/image')
@@ -209,96 +265,142 @@ def dashboard():
     page = int(request.args.get('page', 1))
     per_page = 12
     
-    # Collect evidence data
-    evidence_list = []
-    for fname in os.listdir(EVIDENCE_DIR):
-        if fname.endswith('.json'):
-            with open(os.path.join(EVIDENCE_DIR, fname), 'r', encoding='utf-8') as f:
-                meta = json.load(f)
-            
-            img_path = meta.get('image_path', '')
+    if USE_DATABASE:
+        # Database mode - use database queries
+        # Get statistics
+        stats = get_evidence_stats()
+        total_incidents = stats['total_incidents']
+        high_priority = stats['high_priority']
+        theft_alerts = stats['theft_alerts']
+        resolved = stats['resolved']
+        
+        # Count filtered results
+        total_filtered = count_evidence(date_range, rule_type, camera_filter)
+        
+        # Calculate pagination
+        total_pages = max(1, (total_filtered + per_page - 1) // per_page)
+        page = max(1, min(page, total_pages))
+        offset = (page - 1) * per_page
+        
+        # Get paginated evidence from database
+        evidence_data = get_all_evidence(
+            date_range=date_range,
+            rule_type=rule_type,
+            camera_filter=camera_filter,
+            limit=per_page,
+            offset=offset
+        )
+        
+        # Format evidence for template
+        paginated_evidence = []
+        for item in evidence_data:
+            img_path = item.get('image_path', '')
             image_name = os.path.basename(img_path) if img_path else ''
-            rule = meta.get('rule', '')
-            timestamp = meta.get('timestamp', '')
-            person_id = meta.get('person_id', 0)
-            
-            # Determine priority (high for violence/threat rules, standard for theft)
-            priority = 'high' if any(x in rule.lower() for x in ['aggressive', 'violence', 'threat', 'weapon', 'freeze']) else 'standard'
-            
-            # Format timestamp for display
+            timestamp = item.get('timestamp', '')
             timestamp_short = timestamp.split(' ')[1] if ' ' in timestamp else timestamp
             
-            # Get description and resolution status
-            description = meta.get('description', '')
-            resolved_status = meta.get('resolved', False)
-            
-            evidence_list.append({
-                'id': fname.replace('.json', ''),
+            paginated_evidence.append({
+                'id': item.get('id', ''),
                 'image_name': image_name,
-                'rule': rule,
+                'rule': item.get('rule', ''),
                 'timestamp': timestamp,
                 'timestamp_short': timestamp_short,
-                'person_id': person_id,
-                'camera_id': meta.get('camera_id', 'CAM01'),
-                'priority': priority,
-                'description': description,
-                'resolved': resolved_status
+                'person_id': item.get('person_id', 0),
+                'camera_id': item.get('camera_id', 'CAM01'),
+                'priority': item.get('priority', 'standard'),
+                'description': item.get('description', ''),
+                'resolved': bool(item.get('resolved', False))
             })
-    
-    # Sort by timestamp (newest first)
-    evidence_list.sort(key=lambda x: x['timestamp'], reverse=True)
-    
-    # Apply filters
-    filtered_evidence = evidence_list.copy()
-    
-    # Date range filter
-    if date_range != 'all':
-        from datetime import datetime, timedelta
-        now = datetime.now()
+    else:
+        # Legacy JSON mode
+        evidence_list = []
+        for fname in os.listdir(EVIDENCE_DIR):
+            if fname.endswith('.json'):
+                with open(os.path.join(EVIDENCE_DIR, fname), 'r', encoding='utf-8') as f:
+                    meta = json.load(f)
+                
+                img_path = meta.get('image_path', '')
+                image_name = os.path.basename(img_path) if img_path else ''
+                rule = meta.get('rule', '')
+                timestamp = meta.get('timestamp', '')
+                person_id = meta.get('person_id', 0)
+                
+                # Determine priority
+                priority = meta.get('priority', 'standard')
+                if not priority:
+                    priority = 'high' if any(x in rule.lower() for x in ['aggressive', 'violence', 'threat', 'weapon', 'freeze']) else 'standard'
+                
+                timestamp_short = timestamp.split(' ')[1] if ' ' in timestamp else timestamp
+                description = meta.get('description', '')
+                resolved_status = meta.get('resolved', False)
+                
+                evidence_list.append({
+                    'id': fname.replace('.json', ''),
+                    'image_name': image_name,
+                    'rule': rule,
+                    'timestamp': timestamp,
+                    'timestamp_short': timestamp_short,
+                    'person_id': person_id,
+                    'camera_id': meta.get('camera_id', 'CAM01'),
+                    'priority': priority,
+                    'description': description,
+                    'resolved': resolved_status
+                })
         
-        if date_range == 'today':
-            cutoff = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        elif date_range == 'week':
-            cutoff = now - timedelta(days=7)
-        elif date_range == 'month':
-            cutoff = now - timedelta(days=30)
-        else:
-            cutoff = None
+        # Sort by timestamp (newest first)
+        evidence_list.sort(key=lambda x: x['timestamp'], reverse=True)
         
-        if cutoff:
-            filtered_evidence = [
-                e for e in filtered_evidence
-                if datetime.strptime(e['timestamp'], '%Y-%m-%d %H:%M:%S') >= cutoff
-            ]
-    
-    # Rule type filter
-    if rule_type != 'all':
-        rule_map = {
-            'loitering': 'Loitering',
-            'exit_checkout': 'Exit Without Checkout',
-            'shelf_exit': 'Shelf',
-            'violence': 'violence'
-        }
-        search_term = rule_map.get(rule_type, rule_type)
-        filtered_evidence = [e for e in filtered_evidence if search_term.lower() in e['rule'].lower()]
-    
-    # Camera filter
-    if camera_filter != 'all':
-        filtered_evidence = [e for e in filtered_evidence if e['camera_id'] == camera_filter]
-    
-    # Calculate statistics (from unfiltered data)
-    total_incidents = len(evidence_list)
-    high_priority = sum(1 for e in evidence_list if e['priority'] == 'high')
-    theft_alerts = sum(1 for e in evidence_list if e['priority'] == 'standard')
-    resolved = sum(1 for e in evidence_list if e.get('resolved', False))
-    
-    # Pagination
-    total_filtered = len(filtered_evidence)
-    total_pages = max(1, (total_filtered + per_page - 1) // per_page)
-    page = max(1, min(page, total_pages))
-    start_idx = (page - 1) * per_page
-    end_idx = start_idx + per_page
-    paginated_evidence = filtered_evidence[start_idx:end_idx]
+        # Apply filters
+        filtered_evidence = evidence_list.copy()
+        
+        # Date range filter
+        if date_range != 'all':
+            from datetime import datetime, timedelta
+            now = datetime.now()
+            
+            if date_range == 'today':
+                cutoff = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            elif date_range == 'week':
+                cutoff = now - timedelta(days=7)
+            elif date_range == 'month':
+                cutoff = now - timedelta(days=30)
+            else:
+                cutoff = None
+            
+            if cutoff:
+                filtered_evidence = [
+                    e for e in filtered_evidence
+                    if datetime.strptime(e['timestamp'], '%Y-%m-%d %H:%M:%S') >= cutoff
+                ]
+        
+        # Rule type filter
+        if rule_type != 'all':
+            rule_map = {
+                'loitering': 'Loitering',
+                'exit_checkout': 'Exit Without Checkout',
+                'shelf_exit': 'Shelf',
+                'violence': 'violence'
+            }
+            search_term = rule_map.get(rule_type, rule_type)
+            filtered_evidence = [e for e in filtered_evidence if search_term.lower() in e['rule'].lower()]
+        
+        # Camera filter
+        if camera_filter != 'all':
+            filtered_evidence = [e for e in filtered_evidence if e['camera_id'] == camera_filter]
+        
+        # Calculate statistics
+        total_incidents = len(evidence_list)
+        high_priority = sum(1 for e in evidence_list if e['priority'] == 'high')
+        theft_alerts = sum(1 for e in evidence_list if e['priority'] == 'standard')
+        resolved = sum(1 for e in evidence_list if e.get('resolved', False))
+        
+        # Pagination
+        total_filtered = len(filtered_evidence)
+        total_pages = max(1, (total_filtered + per_page - 1) // per_page)
+        page = max(1, min(page, total_pages))
+        start_idx = (page - 1) * per_page
+        end_idx = start_idx + per_page
+        paginated_evidence = filtered_evidence[start_idx:end_idx]
     
     return render_template('dashboard.html',
                          role=role,
@@ -433,12 +535,66 @@ def snapshot():
     
     return send_file(temp_file.name, as_attachment=True, download_name=filename)
 
+@app.get('/test-pairing')
+def test_pairing():
+    """Test page for device pairing"""
+    return render_template('test_pairing.html')
+
 @app.get('/devices')
 @require_role(['admin'])
 def devices():
     token = get_token()
     role = get_role_from_token(token) or 'anonymous'
-    return render_template('devices.html', role=role, token=token, request=request)
+    
+    # Get device data if database mode is enabled
+    devices_list = []
+    stats = {'total': 0, 'active': 0, 'idle': 0}
+    
+    if USE_DATABASE:
+        devices_list = get_all_devices()
+        stats = get_device_stats()
+        
+        # Add time ago helper for each device
+        from datetime import datetime, timezone
+        now = datetime.now()
+        
+        for device in devices_list:
+            if device.get('last_seen'):
+                try:
+                    last_seen = datetime.strptime(device['last_seen'], "%Y-%m-%d %H:%M:%S")
+                    delta = now - last_seen
+                    
+                    if delta.seconds < 300:  # Less than 5 minutes
+                        device['time_ago'] = f"{delta.seconds // 60} minutes ago"
+                        device['status'] = 'active'
+                        device['status_color'] = 'success'
+                    elif delta.seconds < 3600:  # Less than 1 hour
+                        device['time_ago'] = f"{delta.seconds // 60} minutes ago"
+                        device['status'] = 'idle'
+                        device['status_color'] = 'warning'
+                    elif delta.days == 0:
+                        device['time_ago'] = f"{delta.seconds // 3600} hours ago"
+                        device['status'] = 'idle'
+                        device['status_color'] = 'warning'
+                    else:
+                        device['time_ago'] = f"{delta.days} days ago"
+                        device['status'] = 'inactive'
+                        device['status_color'] = 'secondary'
+                except:
+                    device['time_ago'] = 'Unknown'
+                    device['status'] = 'unknown'
+                    device['status_color'] = 'secondary'
+            else:
+                device['time_ago'] = 'Never'
+                device['status'] = 'inactive'
+                device['status_color'] = 'secondary'
+    
+    return render_template('devices.html', 
+                         role=role, 
+                         token=token, 
+                         request=request,
+                         devices=devices_list,
+                         stats=stats)
 
 @app.get('/incidents')
 @require_role(['admin', 'security', 'viewer'])
@@ -462,20 +618,29 @@ def whoami():
 @require_role(['admin', 'security'])
 def resolve_evidence(evidence_id):
     """Mark an incident as resolved"""
-    json_path = os.path.join(EVIDENCE_DIR, f"{evidence_id}.json")
-    if not os.path.exists(json_path):
-        return abort(404)
-    
     try:
-        with open(json_path, 'r', encoding='utf-8') as f:
-            meta = json.load(f)
+        resolved_by = get_role_from_token(get_token())
         
-        meta['resolved'] = True
-        meta['resolved_at'] = time.strftime("%Y-%m-%d %H:%M:%S")
-        meta['resolved_by'] = get_role_from_token(get_token())
-        
-        with open(json_path, 'w', encoding='utf-8') as f:
-            json.dump(meta, f, indent=2)
+        if USE_DATABASE:
+            # Database mode
+            success = update_evidence_resolution(evidence_id, True, resolved_by)
+            if not success:
+                return abort(404)
+        else:
+            # JSON mode
+            json_path = os.path.join(EVIDENCE_DIR, f"{evidence_id}.json")
+            if not os.path.exists(json_path):
+                return abort(404)
+            
+            with open(json_path, 'r', encoding='utf-8') as f:
+                meta = json.load(f)
+            
+            meta['resolved'] = True
+            meta['resolved_at'] = time.strftime("%Y-%m-%d %H:%M:%S")
+            meta['resolved_by'] = resolved_by
+            
+            with open(json_path, 'w', encoding='utf-8') as f:
+                json.dump(meta, f, indent=2)
         
         return jsonify({'success': True, 'message': 'Incident marked as resolved'})
     except Exception as e:
@@ -485,30 +650,209 @@ def resolve_evidence(evidence_id):
 @require_role(['admin', 'security'])
 def unresolve_evidence(evidence_id):
     """Mark an incident as unresolved"""
-    json_path = os.path.join(EVIDENCE_DIR, f"{evidence_id}.json")
-    if not os.path.exists(json_path):
-        return abort(404)
-    
     try:
-        with open(json_path, 'r', encoding='utf-8') as f:
-            meta = json.load(f)
-        
-        meta['resolved'] = False
-        if 'resolved_at' in meta:
-            del meta['resolved_at']
-        if 'resolved_by' in meta:
-            del meta['resolved_by']
-        
-        with open(json_path, 'w', encoding='utf-8') as f:
-            json.dump(meta, f, indent=2)
+        if USE_DATABASE:
+            # Database mode
+            success = update_evidence_resolution(evidence_id, False)
+            if not success:
+                return abort(404)
+        else:
+            # JSON mode
+            json_path = os.path.join(EVIDENCE_DIR, f"{evidence_id}.json")
+            if not os.path.exists(json_path):
+                return abort(404)
+            
+            with open(json_path, 'r', encoding='utf-8') as f:
+                meta = json.load(f)
+            
+            meta['resolved'] = False
+            if 'resolved_at' in meta:
+                del meta['resolved_at']
+            if 'resolved_by' in meta:
+                del meta['resolved_by']
+            
+            with open(json_path, 'w', encoding='utf-8') as f:
+                json.dump(meta, f, indent=2)
         
         return jsonify({'success': True, 'message': 'Incident marked as unresolved'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.get('/health')
+@csrf.exempt
 def health():
     return {'status': 'ok'}
+
+
+# ============================================================================
+# Device Management API Endpoints
+# ============================================================================
+
+@app.post('/api/devices/pairing-code')
+@require_role(['admin'])
+def create_pairing_code():
+    """Generate a new pairing code for device registration"""
+    if not USE_DATABASE:
+        return jsonify({'success': False, 'error': 'Device management requires database mode'}), 400
+    
+    try:
+        data = request.get_json() or {}
+        role = data.get('role', 'staff')
+        expires_minutes = int(data.get('expires_minutes', 10))
+        
+        # Validate role
+        if role not in ['admin', 'security', 'staff', 'viewer']:
+            return jsonify({'success': False, 'error': 'Invalid role'}), 400
+        
+        created_by = get_role_from_token(get_token())
+        code = generate_pairing_code(role, created_by, expires_minutes)
+        
+        if code:
+            # Cleanup old expired codes
+            cleanup_expired_pairing_codes()
+            
+            return jsonify({
+                'success': True,
+                'code': code,
+                'role': role,
+                'expires_minutes': expires_minutes
+            })
+        else:
+            return jsonify({'success': False, 'error': 'Failed to generate code'}), 500
+    except Exception as e:
+        logger.error(f"Error creating pairing code: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.post('/api/devices/register')
+@csrf.exempt  # Mobile apps won't have CSRF tokens
+def register_device_endpoint():
+    """Register a new device using a pairing code"""
+    if not USE_DATABASE:
+        return jsonify({'success': False, 'error': 'Device management requires database mode'}), 400
+    
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'success': False, 'error': 'No data provided'}), 400
+        
+        code = data.get('code')
+        device_id = data.get('device_id')
+        device_name = data.get('device_name', 'Unknown Device')
+        device_model = data.get('device_model', 'Unknown')
+        device_os = data.get('device_os', 'Unknown')
+        
+        if not code or not device_id:
+            return jsonify({'success': False, 'error': 'Missing required fields'}), 400
+        
+        # Generate auth token for the device
+        auth_token = secrets.token_urlsafe(32)
+        
+        # Get client IP
+        ip_address = request.headers.get('X-Forwarded-For', request.remote_addr)
+        
+        # Register device
+        success = register_device(
+            code=code,
+            device_id=device_id,
+            device_name=device_name,
+            device_model=device_model,
+            device_os=device_os,
+            auth_token=auth_token,
+            ip_address=ip_address,
+            metadata=data.get('metadata', {})
+        )
+        
+        if success:
+            return jsonify({
+                'success': True,
+                'auth_token': auth_token,
+                'message': 'Device registered successfully'
+            })
+        else:
+            return jsonify({'success': False, 'error': 'Invalid or expired pairing code'}), 400
+    except Exception as e:
+        logger.error(f"Error registering device: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.post('/api/devices/<device_id>/revoke')
+@require_role(['admin'])
+def revoke_device_endpoint(device_id):
+    """Revoke device access"""
+    if not USE_DATABASE:
+        return jsonify({'success': False, 'error': 'Device management requires database mode'}), 400
+    
+    try:
+        revoked_by = get_role_from_token(get_token())
+        success = revoke_device(device_id, revoked_by)
+        
+        if success:
+            return jsonify({
+                'success': True,
+                'message': 'Device access revoked successfully'
+            })
+        else:
+            return jsonify({'success': False, 'error': 'Device not found'}), 404
+    except Exception as e:
+        logger.error(f"Error revoking device: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.get('/api/devices')
+@require_role(['admin'])
+def get_devices_api():
+    """Get all devices (API endpoint)"""
+    if not USE_DATABASE:
+        return jsonify({'success': False, 'error': 'Device management requires database mode'}), 400
+    
+    try:
+        role_filter = request.args.get('role', 'all')
+        active_only = request.args.get('active_only', 'false').lower() == 'true'
+        
+        devices_list = get_all_devices(role_filter, active_only)
+        stats = get_device_stats()
+        
+        return jsonify({
+            'success': True,
+            'devices': devices_list,
+            'stats': stats
+        })
+    except Exception as e:
+        logger.error(f"Error getting devices: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.post('/api/devices/heartbeat')
+@csrf.exempt  # Mobile apps won't have CSRF tokens
+def device_heartbeat():
+    """Update device last seen timestamp"""
+    if not USE_DATABASE:
+        return jsonify({'success': False, 'error': 'Device management requires database mode'}), 400
+    
+    try:
+        # Get device auth token from header
+        auth_token = request.headers.get('X-Device-Token')
+        if not auth_token:
+            return jsonify({'success': False, 'error': 'No device token provided'}), 401
+        
+        # Get device by token
+        device = get_device_by_token(auth_token)
+        if not device:
+            return jsonify({'success': False, 'error': 'Invalid device token'}), 401
+        
+        # Update last seen
+        ip_address = request.headers.get('X-Forwarded-For', request.remote_addr)
+        update_device_last_seen(device['id'], ip_address)
+        
+        return jsonify({
+            'success': True,
+            'message': 'Heartbeat received'
+        })
+    except Exception as e:
+        logger.error(f"Error processing heartbeat: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 
 if __name__ == '__main__':
     app.run(host='127.0.0.1', port=5000, debug=True)

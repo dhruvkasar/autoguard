@@ -1,0 +1,224 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "AutoGuard Runtime Architecture",
+    "subtitle": "AI-Powered Retail Security Surveillance System",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "detection-path",
+        "label": "Detection Pipeline",
+        "focus": ["camera-feeds", "detection-pipeline", "rules-engine", "evidence-mgr", "alert-system", "telegram-api"],
+        "note": "Primary runtime path from video input to alert generation"
+      },
+      {
+        "id": "data-storage",
+        "label": "Evidence & Storage",
+        "focus": ["evidence-mgr", "database"],
+        "note": "Evidence management with SHA-256 integrity and dual storage"
+      },
+      {
+        "id": "web-access",
+        "label": "Web Dashboard",
+        "focus": ["users", "web-server", "evidence-mgr"],
+        "note": "Authenticated user access with role-based permissions"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "camera-feeds",
+      "type": "external",
+      "label": "Camera Feeds",
+      "sublabel": "USB / RTSP / Files",
+      "pos": [40, 290],
+      "size": [150, 70],
+      "tag": "Trusted Source"
+    },
+    {
+      "id": "detection-pipeline",
+      "type": "backend",
+      "label": "Detection Pipeline",
+      "sublabel": "YOLOv8 + ByteTrack + Zones",
+      "pos": [250, 290],
+      "size": [150, 70],
+      "tag": "Person Tracking"
+    },
+    {
+      "id": "rules-engine",
+      "type": "backend",
+      "label": "Rules Engine",
+      "sublabel": "Behavioral Analysis",
+      "pos": [460, 290],
+      "size": [150, 70],
+      "tag": "Loitering/Exit"
+    },
+    {
+      "id": "evidence-mgr",
+      "type": "backend",
+      "label": "Evidence Manager",
+      "sublabel": "Snapshot + SHA-256",
+      "pos": [670, 290],
+      "size": [150, 70]
+    },
+    {
+      "id": "alert-system",
+      "type": "backend",
+      "label": "Alert System",
+      "sublabel": "Telegram Bot",
+      "pos": [880, 290],
+      "size": [150, 70]
+    },
+    {
+      "id": "telegram-api",
+      "type": "external",
+      "label": "Telegram API",
+      "sublabel": "Real-time Alerts",
+      "pos": [1090, 290],
+      "size": [150, 70],
+      "tag": "External"
+    },
+    {
+      "id": "database",
+      "type": "database",
+      "label": "SQLite Database",
+      "sublabel": "Evidence Metadata",
+      "pos": [670, 400],
+      "size": [150, 70]
+    },
+    {
+      "id": "users",
+      "type": "frontend",
+      "label": "Users",
+      "sublabel": "Admin / Security / Viewer",
+      "pos": [460, 80],
+      "size": [150, 70]
+    },
+    {
+      "id": "web-server",
+      "type": "backend",
+      "label": "Web Server",
+      "sublabel": "Flask + RBAC",
+      "pos": [670, 80],
+      "size": [150, 70],
+      "tag": "Token Auth"
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "security-group",
+      "label": "Authenticated Zone (Token + RBAC)",
+      "wraps": ["users", "web-server"]
+    },
+    {
+      "kind": "region",
+      "label": "Detection Pipeline",
+      "wraps": ["detection-pipeline", "rules-engine", "evidence-mgr", "alert-system"]
+    }
+  ],
+  "connections": [
+    {
+      "id": "feed-input",
+      "from": "camera-feeds",
+      "to": "detection-pipeline",
+      "label": "Video Frames",
+      "variant": "emphasis",
+      "labelDy": 59
+    },
+    {
+      "id": "detect-rules",
+      "from": "detection-pipeline",
+      "to": "rules-engine",
+      "label": "Tracked Objects",
+      "variant": "emphasis",
+      "labelDy": -40
+    },
+    {
+      "id": "rules-evidence",
+      "from": "rules-engine",
+      "to": "evidence-mgr",
+      "label": "Rule Violations",
+      "variant": "emphasis",
+      "labelDy": -29
+    },
+    {
+      "id": "evidence-db",
+      "from": "evidence-mgr",
+      "to": "database",
+      "label": "Store Metadata",
+      "labelDy": 24
+    },
+    {
+      "id": "evidence-alert",
+      "from": "evidence-mgr",
+      "to": "alert-system",
+      "label": "Priority Incidents",
+      "labelDy": -29
+    },
+    {
+      "id": "alert-telegram",
+      "from": "alert-system",
+      "to": "telegram-api",
+      "label": "Send Alert",
+      "variant": "dashed"
+    },
+    {
+      "id": "user-web",
+      "from": "users",
+      "to": "web-server",
+      "label": "HTTPS + JWT",
+      "variant": "security"
+    },
+    {
+      "id": "web-evidence",
+      "from": "web-server",
+      "to": "evidence-mgr",
+      "label": "Evidence API",
+      "labelDy": 24
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Detection Pipeline",
+      "items": [
+        "YOLOv8 person detection with 0.35 confidence threshold",
+        "ByteTrack maintains persistent IDs across frames",
+        "Three configurable zones: Shelf, Checkout, Exit",
+        "Behavioral rules: loitering, exit-without-checkout, repeated shelf-exit patterns"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Evidence & Storage",
+      "items": [
+        "Automatic snapshot capture on rule violations with SHA-256 integrity hashing",
+        "Dual storage: JSON files (backward compatibility) + SQLite database (efficient queries)",
+        "Priority classification (high/standard) with resolution tracking",
+        "7-day automatic retention policy with configurable extension"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Web Dashboard",
+      "items": [
+        "Role-based access control: Admin (full), Security (manage evidence), Viewer (read-only)",
+        "Live MJPEG video streaming with multi-client support and FPS statistics",
+        "Evidence filtering by date range, rule type, camera ID, priority level",
+        "Rate limiting: 120 requests/min for evidence endpoints, 30 requests/min for exports"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Security Boundaries",
+      "items": [
+        "Token-based authentication with constant-time comparison prevents timing attacks",
+        "HTTPOnly cookies with Secure + SameSite=Strict flags, 12-hour session timeout",
+        "Security headers: CSP, HSTS, X-Frame-Options DENY, X-Content-Type-Options nosniff",
+        "Path traversal prevention with filename validation and directory containment checks",
+        "Docker deployment with non-root user (uid 1000), local-only binding by default"
+      ]
+    }
+  ]
+}
